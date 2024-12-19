@@ -1,0 +1,31 @@
+{
+  "name": "@edu-tosel/express-utils",
+  "version": "0.0.0",
+  "description": "TOSEL Express.js utils",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --noEmit false",
+    "build-publish": "npm run build && node setupPackage.js && cd dist && npm publish",
+    "upload": "npm version patch && npm run build-publish && git push --follow-tags",
+    "test": "ts-node src/test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/edu-tosel/express-utils.git"
+  },
+  "keywords": [
+    "express",
+    "tosel",
+    "typescript",
+    "logger"
+  ],
+  "author": "International TOSEL Committee",
+  "license": "MIT",
+  "dependencies": {
+    "@types/express": "^5.0.0",
+    "@types/morgan": "^1.9.9",
+    "express": "^4.21.2",
+    "morgan": "^1.10.0",
+    "typescript": "^5.7.2"
+  }
+}
