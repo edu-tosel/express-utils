@@ -1,6 +1,6 @@
 {
   "name": "@edu-tosel/express-utils",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "TOSEL Express.js utils",
   "main": "index.js",
   "scripts": {
