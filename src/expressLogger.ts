@@ -141,7 +141,14 @@ const createExpressLoggerRouter = ({
   });
   morgan.token("decoded-url", (req: any) => {
     const url = req.originalUrl || req.url;
-    if (url) return decodeURIComponent(url);
+    if (url) {
+      try {
+        return decodeURIComponent(url);
+      } catch (e) {
+        console.log(`[Express Logger Router] Warning: Cannot decode URL`);
+        return url;
+      }
+    }
     return undefined;
   });
   morgan.token("HTTP-version", (req) => "HTTP/" + req.httpVersion);
