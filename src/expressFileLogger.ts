@@ -1,0 +1,273 @@
+import { Router } from "express";
+import { UAParser } from "ua-parser-js";
+import morgan from "morgan";
+
+import { createLogger, transports, format } from 'winston';
+import winstonDaily from "winston-daily-rotate-file"
+
+interface CreateExpressLoggerRouterArgument {
+  /**
+   * reverseDnsStore is a key-value store that maps IP addresses to domain names.
+   * You can change from IP address to domain name.
+   * @example
+   * {
+   *  "127.0.0.1": "localhost"
+   * }
+   */
+  reverseDnsStore?: Record<string, string>;
+  /**
+   * timeOptions is a option for Intl.DateTimeFormat.
+   * You can change the time format.
+   * @default
+   * {
+   *   timeZone: "Asia/Seoul",
+   *   day: "2-digit",
+   *   month: "2-digit",
+   *   year: undefined,
+   *   hour: "2-digit",
+   *   minute: "2-digit",
+   *   second: "2-digit",
+   * }
+   */
+  timeOptions?: Intl.DateTimeFormatOptions;
+  loggerOptions?: {
+    /**
+     * printHttpVersion is a option for print HTTP version. It will be overwrite by process environment variable `EXPRESS_LOGGER_PRINT_HTTP_VERSION`.
+     * @default false
+     */
+    printHttpVersion?: boolean;
+    /**
+     * printUserAgent is a option for print User Agent. It will be overwrite by process environment variable `EXPRESS_LOGGER_PRINT_USER_AGENT`.
+     * @default true
+     */
+    printUserAgent?: boolean;
+    /**
+     * decodeUrl is a option for decode URL. It will be overwrite by process environment variable `EXPRESS_LOGGER_DECODE_URL`.
+     * @default true
+     */
+    decodeUrl?: boolean;
+    /**
+     * printBodySize is a option for print body size. It will be overwrite by process environment variable `EXPRESS_LOGGER_PRINT_BODY_SIZE`.
+     * @default false
+     */
+    printBodySize?: boolean;
+    /**
+     * printBody is a option for print body. It will be overwrite by process environment variable `EXPRESS_LOGGER_PRINT_BODY`.
+     * @default false
+     */
+    printBody?: boolean;
+  };
+}
+
+const createExpressFileLoggerRouter = ({
+  reverseDnsStore,
+  timeOptions,
+  loggerOptions,
+}: CreateExpressLoggerRouterArgument = {}): Router => {
+  if (typeof window !== "undefined") {
+    console.error(
+      "[Express Logger] This module is not supported in the browser environment."
+    );
+    return {} as never;
+  }
+  reverseDnsStore = reverseDnsStore || {};
+  timeOptions = timeOptions || {
+    timeZone: "Asia/Seoul",
+    day: "2-digit",
+    month: "2-digit",
+    year: undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  };
+  const {
+    EXPRESS_LOGGER_PRINT_HTTP_VERSION,
+    EXPRESS_LOGGER_PRINT_USER_AGENT,
+    EXPRESS_LOGGER_DECODE_URL,
+    EXPRESS_LOGGER_PRINT_BODY_SIZE,
+    EXPRESS_LOGGER_PRINT_BODY,
+  } = process.env;
+  const parseProcessEnv = (
+    obj: Record<string, string | undefined>,
+    defaultOption: boolean = false
+  ) => {
+    const [[envName, value]] = Object.entries(obj);
+    if (value === undefined) return defaultOption;
+    if (value === "true") {
+      console.log(`[Express Logger Router] ${envName} is true`);
+      return true;
+    }
+    if (value === "false") {
+      console.log(`[Express Logger Router] ${envName} is false`);
+      return false;
+    }
+    console.log(
+      `Warning: [Express Logger Router] ${envName} is not a boolean, Please check the environment variable. (value: ${value})`
+    );
+    return defaultOption;
+  };
+  const printHttpVersion =
+    loggerOptions?.printHttpVersion ??
+    parseProcessEnv({ EXPRESS_LOGGER_PRINT_HTTP_VERSION });
+  const printUserAgent =
+    loggerOptions?.printUserAgent ??
+    parseProcessEnv({ EXPRESS_LOGGER_PRINT_USER_AGENT }, true);
+  const decodeUrl =
+    loggerOptions?.decodeUrl ??
+    parseProcessEnv({ EXPRESS_LOGGER_DECODE_URL }, true);
+  const printBodySize =
+    loggerOptions?.printBodySize ??
+    parseProcessEnv({ EXPRESS_LOGGER_PRINT_BODY_SIZE });
+  const printBody =
+    loggerOptions?.printBody ?? parseProcessEnv({ EXPRESS_LOGGER_PRINT_BODY });
+  /**
+   *  from morgan source code
+   */
+  function getip(req: any): string | undefined {
+    return (
+      req.ip ||
+      req._remoteAddress ||
+      (req.connection && req.connection.remoteAddress) ||
+      undefined
+    );
+  }
+
+  morgan.token("local-time", (req) => {
+    const now = new Date();
+    return now.toLocaleString("ko-KR", timeOptions);
+  });
+  morgan.token("remote-addr", (req) => {
+    const ip = getip(req);
+    if (!ip) return "unknown";
+    const domain = reverseDnsStore[ip];
+    return domain ?? ip;
+  });
+  morgan.token("decoded-url", (req: any) => {
+    const url = req.originalUrl || req.url;
+    if (url) {
+      try {
+        return decodeURIComponent(url);
+      } catch (e) {
+        console.log(`[Express Logger Router] Warning: Cannot decode URL`);
+        return url;
+      }
+    }
+    return undefined;
+  });
+  morgan.token("HTTP-version", (req) => "HTTP/" + req.httpVersion);
+  enum Size {
+    B = 1,
+    KB = 1024,
+    MB = 1024 ** 2,
+    GB = 1024 ** 3,
+  }
+  const getSize = (size: number) => {
+    if (Number.isNaN(size)) return "NaN";
+    if (size < Size.KB) return `${size}B`;
+    if (size < Size.MB) return `${(size / 1024).toFixed(2)}KiB`;
+    if (size < Size.GB) return `${(size / 1024 ** 2).toFixed(2)}MiB`;
+    return `${(size / 1024 ** 3).toFixed(2)}GiB`;
+  };
+  morgan.token("content-size", (req, res) => {
+    if (!res.headersSent) return "-";
+    const contentLength = res.getHeader("content-length");
+    if (typeof contentLength === "string") {
+      const length = parseInt(contentLength, 10);
+      const size = getSize(length);
+      return size;
+    }
+    return "-";
+  });
+  morgan.token("user-client", (req) => {
+    const ua = req.headers["user-agent"];
+    const isWebBrowser = ua ? /^Mozilla\/5.0/.test(ua) : false;
+    if (!isWebBrowser) {
+      if (!ua) return "-";
+      return ua;
+    }
+    const parser = new UAParser(ua);
+    const { name, version } = parser.getBrowser();
+    if (!name) return ua;
+    if (!version) return name;
+    return `${name}:${version}`;
+  });
+  morgan.token("body", (req) => {
+    if (!printBody) return "";
+    if (req.method === "GET") return "";
+    const body = (req as any).body;
+    if (!body) return "\nCannot parse body";
+    return "\nRequest Body\n" + JSON.stringify(body, null, 2);
+  });
+  const tokens = [
+    "[:remote-addr]",
+    "[:local-time]",
+    ":method",
+    decodeUrl ? ":decoded-url" : ":url",
+    printHttpVersion ? ":HTTP-version" : null,
+    ":status",
+    printBodySize ? ":content-size" : null,
+    ":response-time",
+    "ms",
+    printUserAgent ? ":user-client" : null,
+    printBody ? ":body" : null,
+  ];
+  const filteredTokens = tokens.filter((token) => token !== null);
+  const script = filteredTokens.join(" ");
+  logger.info(script)
+
+  const logRouter = Router();
+  logRouter.use(morgan(script));
+  return logRouter;
+};
+
+export default createExpressFileLoggerRouter;
+
+
+
+
+interface TransformableInfo {
+  level: string;
+  message: string;
+  [key: string]: any;
+}
+
+const logDir = `${process.cwd()}/${process.env.LOG_DIR_NAME??'log'}`;
+
+
+
+const logger = createLogger({
+  
+  transports: [
+    new winstonDaily({
+       level: 'info', // info 레벨에선
+       datePattern: 'YYYY-MM-DD', // 파일 날짜 형식
+       dirname: logDir, // 파일 경로
+       filename: `%DATE%.log`, // 파일 이름
+       maxFiles: 30, 
+       zippedArchive: true, // 아카이브된 로그 파일을 gzip으로 압축할지 여부
+       format: format.combine(
+        format.label({ label: '' }),
+        format.timestamp({
+          format: 'YYYY-MM-DD HH:mm:ss'
+        }),
+        format.printf((info) => `${info.timestamp} - ${info.level}: ${info.label} ${info.message}`),
+      )       
+    }),
+    //* error 레벨 로그를 저장할 파일 설정 (info에 자동 포함되지만 일부러 따로 빼서 설정)
+    new winstonDaily({
+       level: 'error', // error 레벨에선
+       datePattern: 'YYYY-MM-DD',
+       dirname: logDir + '/error', // /logs/error 하위에 저장
+       filename: `%DATE%.error.log`, // 에러 로그는 2020-05-28.error.log 형식으로 저장
+       maxFiles: 30,
+       zippedArchive: true,
+       format: format.combine(
+        format.label({ label: '' }),
+        format.timestamp({
+          format: 'YYYY-MM-DD HH:mm:ss'
+        }),
+        format.printf((info) => `${info.timestamp} - ${info.level}: ${info.label} ${info.message}`),
+      )
+    }),
+ ],
+});
